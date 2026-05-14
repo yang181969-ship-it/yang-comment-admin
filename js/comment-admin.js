@@ -70,10 +70,12 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token }),
         });
-        const data = await res.json().catch(() => null);
+        const result = await res.json().catch(() => null);
+        console.log("[admin] login result", result);
 
-        if (!res.ok || !data?.ok) {
-          throw new Error(data?.message || `验证失败：${res.status}`);
+        if (!res.ok || !result?.ok) {
+          console.warn("[admin]", result?.message || `验证失败：${res.status}`);
+          throw new Error(result?.message || `验证失败：${res.status}`);
         }
 
         sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
@@ -209,10 +211,10 @@
         pageSize: String(state.pageSize),
         status: state.statusFilter,
       });
-      const data = await adminFetch(`/api/admin/comments?${params.toString()}`);
+      const result = await adminFetch(`/api/admin/comments?${params.toString()}`);
 
-      const comments = Array.isArray(data?.data?.comments) ? data.data.comments : [];
-      const pagination = data?.data?.pagination || {};
+      const comments = Array.isArray(result?.data?.comments) ? result.data.comments : [];
+      const pagination = result?.data?.pagination || {};
 
       state.comments = comments;
       state.page = pagination.page || page;
@@ -227,7 +229,7 @@
         exitPanel(root, "登录已过期，请重新登录。");
         throw error;
       }
-      console.error("[comment-admin] comments request failed:", error.message || error);
+      console.warn("[admin]", error.message || error);
       list.innerHTML = `<div class="comment-admin-state is-error">加载失败：${escapeHTML(error.message || "未知错误")}</div>`;
     }
   }
@@ -459,14 +461,19 @@
       },
     });
 
-    const data = await res.json().catch(() => null);
+    const result = await res.json().catch(() => null);
 
-    if (!res.ok || !data?.ok) {
-      const err = new Error(data?.message || `请求失败：${res.status}`);
+    if ((options.method || "GET").toUpperCase() === "GET" && path.startsWith("/api/admin/comments?")) {
+      console.log("[admin] comments result", result);
+    }
+
+    if (!res.ok || !result?.ok) {
+      console.warn("[admin]", result?.message || `请求失败：${res.status}`);
+      const err = new Error(result?.message || `请求失败：${res.status}`);
       err.status = res.status;
       throw err;
     }
-    return data;
+    return result;
   }
 
   function getStoredAdminToken() {
@@ -536,5 +543,11 @@
       return window.CSS.escape(String(value));
     }
     return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initCommentAdminPage, { once: true });
+  } else {
+    initCommentAdminPage();
   }
 })();
