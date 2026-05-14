@@ -9,10 +9,11 @@
 
   const COMMENT_API_BASE = "https://comment.yang181969.com";
   const ADMIN_TOKEN_KEY = "yang_comment_admin_token";
+  const INVALID_ADMIN_TOKENS = new Set(["你的ADMIN_TOKEN"]);
 
   const state = {
     page: 1,
-    pageSize: 50,
+    pageSize: 20,
     totalPages: 0,
     statusFilter: "all",
     comments: [],
@@ -26,7 +27,7 @@
     bindLogin(root);
     bindPanel(root);
 
-    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || "";
+    const token = getStoredAdminToken();
     if (token) {
       enterPanel(root);
       loadComments(root, 1).catch(() => {
@@ -49,16 +50,20 @@
     const tokenInput = root.querySelector("#comment-admin-token");
     const message = root.querySelector("#comment-admin-login-message");
     const logoutBtn = root.querySelector("#comment-admin-logout");
+    const loginBtn = form?.querySelector("button") || Array.from(root.querySelectorAll("button"))
+      .find(button => button.textContent?.trim() === "进入后台");
+    let loggingIn = false;
 
-    form?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const token = tokenInput?.value.trim() || "";
+    async function login() {
+      if (loggingIn) return;
+      const token = normalizeAdminToken(tokenInput?.value || "");
       if (!token) {
-        showMessage(message, "请填写管理员密钥。", "error");
+        showMessage(message, "请填写有效的管理员密钥。", "error");
         return;
       }
 
       showMessage(message, "正在验证……", "info");
+      loggingIn = true;
       try {
         const res = await fetch(`${COMMENT_API_BASE}/api/admin/login`, {
           method: "POST",
@@ -79,8 +84,22 @@
         await loadComments(root, 1);
       } catch (error) {
         showMessage(message, error.message || "管理员验证失败。", "error");
+      } finally {
+        loggingIn = false;
       }
+    }
+
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      login();
     });
+
+    if (loginBtn && !(loginBtn.form === form && loginBtn.type === "submit")) {
+      loginBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        login();
+      });
+    }
 
     logoutBtn?.addEventListener("click", () => {
       sessionStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -208,6 +227,7 @@
         exitPanel(root, "登录已过期，请重新登录。");
         throw error;
       }
+      console.error("[comment-admin] comments request failed:", error.message || error);
       list.innerHTML = `<div class="comment-admin-state is-error">加载失败：${escapeHTML(error.message || "未知错误")}</div>`;
     }
   }
@@ -267,6 +287,7 @@
     const statusBadge = renderStatusBadge(item.status);
     const time = escapeHTML(formatDate(item.created_at));
     const idText = `#${escapeHTML(String(item.id))}`;
+    const likes = Number(item.likes || 0);
     const extraMail = item.email ? `<span class="comment-admin-meta__sub">${escapeHTML(item.email)}</span>` : "";
     const sizeClass = opts.isReply ? " comment-admin-meta--reply" : "";
 
@@ -277,6 +298,7 @@
         ${statusBadge}
         <span class="comment-admin-meta__id">${idText}</span>
         <span class="comment-admin-meta__time">${time}</span>
+        <span class="comment-admin-like-count" title="点赞数">⚡ ${likes}</span>
         ${extraMail}
       </header>
     `;
@@ -420,7 +442,13 @@
   // 工具
   // ============================================================
   async function adminFetch(path, options = {}) {
-    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || "";
+    const token = getStoredAdminToken();
+    if (!token) {
+      const err = new Error("请先登录管理员后台。");
+      err.status = 401;
+      throw err;
+    }
+
     const res = await fetch(`${COMMENT_API_BASE}${path}`, {
       cache: "no-cache",
       ...options,
@@ -439,6 +467,19 @@
       throw err;
     }
     return data;
+  }
+
+  function getStoredAdminToken() {
+    const token = normalizeAdminToken(sessionStorage.getItem(ADMIN_TOKEN_KEY) || "");
+    if (!token) {
+      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    }
+    return token;
+  }
+
+  function normalizeAdminToken(value) {
+    const token = String(value || "").trim();
+    return INVALID_ADMIN_TOKENS.has(token) ? "" : token;
   }
 
   function isAdminRole(item) {
