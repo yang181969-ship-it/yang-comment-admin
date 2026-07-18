@@ -30,10 +30,11 @@
     const token = getStoredAdminToken();
     if (token) {
       enterPanel(root);
-      loadComments(root, 1).catch(() => {
-        // token 失效，退回登录态
-        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-        exitPanel(root, "登录已过期，请重新登录。");
+      loadComments(root, 1).catch((error) => {
+        if (error.status === 401) {
+          sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+          exitPanel(root, "登录已过期，请重新登录。");
+        }
       });
     } else {
       exitPanel(root);
@@ -71,7 +72,6 @@
           body: JSON.stringify({ token }),
         });
         const result = await res.json().catch(() => null);
-        console.log("[admin] login result", result);
 
         if (!res.ok || !result?.ok) {
           console.warn("[admin]", result?.message || `验证失败：${res.status}`);
@@ -198,16 +198,16 @@
   // ============================================================
   // 加载列表
   // ============================================================
-  async function loadComments(root, page = 1) {
+  async function loadComments(root, page = 1, options = {}) {
     const list = root.querySelector("#comment-admin-list");
     if (!list) return;
 
-    state.page = page;
+    const requestedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
     list.innerHTML = `<div class="comment-admin-state">正在加载……</div>`;
 
     try {
       const params = new URLSearchParams({
-        page: String(page),
+        page: String(requestedPage),
         pageSize: String(state.pageSize),
         status: state.statusFilter,
       });
@@ -215,14 +215,23 @@
 
       const comments = Array.isArray(result?.data?.comments) ? result.data.comments : [];
       const pagination = result?.data?.pagination || {};
+      const totalPages = Math.max(Number(pagination.totalPages) || 0, 0);
+
+      if (requestedPage > totalPages && totalPages > 0 && options.allowPageFallback !== false) {
+        return loadComments(root, totalPages, { allowPageFallback: false });
+      }
 
       state.comments = comments;
-      state.page = pagination.page || page;
-      state.totalPages = pagination.totalPages || 0;
+      state.page = totalPages > 0 ? (Number(pagination.page) || requestedPage) : 1;
+      state.totalPages = totalPages;
       state.replyingTo = null;
 
       renderList(root, comments);
-      renderPagination(root, pagination);
+      renderPagination(root, {
+        ...pagination,
+        page: state.page,
+        totalPages: state.totalPages,
+      });
     } catch (error) {
       if (error.status === 401) {
         sessionStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -290,7 +299,6 @@
     const time = escapeHTML(formatDate(item.created_at));
     const idText = `#${escapeHTML(String(item.id))}`;
     const likes = Number(item.likes || 0);
-    const extraMail = item.email ? `<span class="comment-admin-meta__sub">${escapeHTML(item.email)}</span>` : "";
     const sizeClass = opts.isReply ? " comment-admin-meta--reply" : "";
 
     return `
@@ -301,7 +309,6 @@
         <span class="comment-admin-meta__id">${idText}</span>
         <span class="comment-admin-meta__time">${time}</span>
         <span class="comment-admin-like-count" title="点赞数">⚡ ${likes}</span>
-        ${extraMail}
       </header>
     `;
   }
@@ -362,7 +369,7 @@
     }
 
     wrap.hidden = false;
-    info.textContent = `${pagination.page || 1} / ${totalPages}（共 ${pagination.total || 0} 条）`;
+    info.textContent = `${pagination.page || 1} / ${totalPages}（共 ${pagination.total || 0} 个线程）`;
     prev.disabled = (pagination.page || 1) <= 1;
     next.disabled = (pagination.page || 1) >= totalPages;
   }
@@ -447,7 +454,7 @@
     const token = getStoredAdminToken();
     if (!token) {
       const err = new Error("请先登录管理员后台。");
-      err.status = 401;
+      err.status = 0;
       throw err;
     }
 
@@ -463,10 +470,6 @@
 
     const result = await res.json().catch(() => null);
 
-    if ((options.method || "GET").toUpperCase() === "GET" && path.startsWith("/api/admin/comments?")) {
-      console.log("[admin] comments result", result);
-    }
-
     if (!res.ok || !result?.ok) {
       console.warn("[admin]", result?.message || `请求失败：${res.status}`);
       const err = new Error(result?.message || `请求失败：${res.status}`);
@@ -477,11 +480,7 @@
   }
 
   function getStoredAdminToken() {
-    const token = normalizeAdminToken(sessionStorage.getItem(ADMIN_TOKEN_KEY) || "");
-    if (!token) {
-      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-    }
-    return token;
+    return normalizeAdminToken(sessionStorage.getItem(ADMIN_TOKEN_KEY) || "");
   }
 
   function normalizeAdminToken(value) {
